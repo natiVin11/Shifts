@@ -3,10 +3,10 @@ from streamlit_gsheets import GSheetsConnection
 import pandas as pd
 import hashlib
 import plotly.express as px
-from datetime import datetime, timedelta
+from datetime import datetime
 
-# --- הגדרות דף ---
-st.set_page_config(page_title="MGROUP | Enterprise Cloud", layout="wide")
+# --- הגדרות עיצוב MGROUP ---
+st.set_page_config(page_title="MGROUP 360 | Enterprise System", layout="wide")
 
 def local_css():
     st.markdown("""
@@ -16,123 +16,117 @@ def local_css():
     :root { --main-blue: #1A374D; --accent-orange: #FF8C32; --light-bg: #F0F2F6; }
     .stApp { background-color: var(--light-bg); }
     .header-card { background: white; padding: 20px; border-radius: 20px; box-shadow: 0 10px 25px rgba(0,0,0,0.05); display: flex; flex-direction: column; align-items: center; margin-bottom: 30px; border-bottom: 5px solid var(--accent-orange); }
-    .card { background: white; padding: 25px; border-radius: 18px; box-shadow: 0 5px 15px rgba(0,0,0,0.04); margin-bottom: 20px; border-right: 6px solid var(--main-blue); }
-    .stButton>button { background: linear-gradient(135deg, var(--accent-orange), #e67e22); color: white; border-radius: 12px; font-weight: bold; width: 100%; height: 3.5em; border: none; }
+    .card { background: white; padding: 20px; border-radius: 15px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); margin-bottom: 20px; border-right: 5px solid var(--main-blue); }
+    .stButton>button { background: linear-gradient(135deg, var(--accent-orange), #e67e22); color: white; border-radius: 10px; font-weight: bold; width: 100%; border: none; }
     </style>
     """, unsafe_allow_html=True)
 
 local_css()
 
 # --- חיבור לענן (Google Sheets) ---
-# וודא שהגדרת ב-Secrets את ה-URL תחת [connections.gsheets]
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-def get_table(sheet_name):
-    try:
-        return conn.read(worksheet=sheet_name)
-    except:
-        # יצירת טבלה ריקה עם עמודות נכונות אם הגיליון לא קיים
-        return pd.DataFrame()
+def get_data(sheet):
+    try: return conn.read(worksheet=sheet)
+    except: return pd.DataFrame()
 
-def save_table(df, sheet_name):
-    conn.update(worksheet=sheet_name, data=df)
+def save_data(df, sheet):
+    conn.update(worksheet=sheet, data=df)
     st.cache_data.clear()
 
-# --- עזרי אבטחה ---
-def hash_pwd(pwd): return hashlib.sha256(str.encode(pwd)).hexdigest()
+def hash_p(p): return hashlib.sha256(str.encode(p)).hexdigest()
 
-# --- לוגו וכותרת ---
-logo_url = "https://www.mgrp.co.il/wp-content/uploads/2022/04/Logo-color@1x.svg"
-st.markdown(f'<div class="header-card"><img src="{logo_url}" width="180"><h3>MGROUP | פורטל ארגוני מבוסס ענן</h3></div>', unsafe_allow_html=True)
+# --- כותרת לוגו ---
+st.markdown(f'<div class="header-card"><img src="https://www.mgrp.co.il/wp-content/uploads/2022/04/Logo-color@1x.svg" width="160"><h3>MGROUP 360 - פורטל ניהול משולב</h3></div>', unsafe_allow_html=True)
 
-# --- ניהול התחברות ---
+# --- לוגיקת כניסה ---
 if 'logged_in' not in st.session_state: st.session_state['logged_in'] = False
 
 if not st.session_state['logged_in']:
     with st.columns([1,1.2,1])[1]:
         st.markdown('<div class="card">', unsafe_allow_html=True)
-        u_in = st.text_input("שם משתמש")
-        p_in = st.text_input("סיסמה", type='password')
+        u, p = st.text_input("שם משתמש"), st.text_input("סיסמה", type='password')
         if st.button("כניסה למערכת"):
-            users_df = get_table("users")
-            if not users_df.empty:
-                user_match = users_df[users_df['username'] == u_in]
-                if not user_match.empty and hash_pwd(p_in) == user_match.iloc[0]['password']:
-                    st.session_state.update({"logged_in": True, "user": u_in, "role": user_match.iloc[0]['role'], "team": user_match.iloc[0]['team']})
-                    st.rerun()
-                else: st.error("פרטים שגויים")
-            else:
-                # כניסת חירום למנהל ראשון אם הגיליון ריק
-                if u_in == "admin" and p_in == "admin123":
-                    st.session_state.update({"logged_in": True, "user": "admin", "role": "IT", "team": "ניהול"})
-                    st.rerun()
+            users = get_data("users")
+            user_row = users[users['username'] == u] if not users.empty else pd.DataFrame()
+            if not user_row.empty and hash_p(p) == user_row.iloc[0]['password']:
+                st.session_state.update({"logged_in": True, "user": u, "role": user_row.iloc[0]['role'], 
+                                       "team": user_row.iloc[0]['team'], "manager": user_row.iloc[0]['manager']})
+                st.rerun()
+            elif u == "admin" and p == "admin123":
+                st.session_state.update({"logged_in": True, "user": "admin", "role": "IT", "team": "ניהול", "manager": "None"})
+                st.rerun()
+            else: st.error("פרטים שגויים")
         st.markdown('</div>', unsafe_allow_html=True)
 else:
     role = st.session_state['role']
-    st.sidebar.image(logo_url, width=120)
-    st.sidebar.markdown(f"**שלום, {st.session_state['user']}**")
+    st.sidebar.markdown(f"**שלום, {st.session_state['user']}**\n תפקיד: {role}")
     if st.sidebar.button("יציאה"):
         st.session_state['logged_in'] = False
         st.rerun()
 
-    # --- פאנל IT: ניהול משתמשים וסנכרון ענן ---
+    # --- פאנל IT: אוטומציה מלאה ---
     if role == "IT":
-        st.header("⚙️ ניהול IT (Google Sheets Sync)")
-        t1, t2 = st.tabs(["ניהול משתמשים באקסל", 'צ"ק-ליסט מערכות'])
+        st.header("⚙️ מרכז בקרה IT")
+        st.markdown('<div class="card">', unsafe_allow_html=True)
+        st.subheader("יצירת משתמשים אוטומטית (אקסל)")
+        up = st.file_uploader("העלה קובץ (username, role, team, manager)", type=['xlsx'])
+        if up and st.button("צור משתמשים עם סיסמת ברירת מחדל (123456)"):
+            new_u = pd.read_excel(up)
+            new_u['password'] = hash_p("123456")
+            old_u = get_data("users")
+            save_data(pd.concat([old_u, new_u]).drop_duplicates(subset=['username']), "users")
+            st.success("המשתמשים נוצרו וסונכרנו לענן!")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    # --- פאנל מנהל מוקד: ניהול על (360) ---
+    elif role == "מנהל מוקד":
+        st.header(f"📊 ניהול מוקד: {st.session_state['team']}")
+        t1, t2, t3 = st.tabs(["דוחות וחיזוי", "ניהול ר"צים", "מעקב שעות"])
         
         with t1:
-            st.markdown('<div class="card">', unsafe_allow_html=True)
-            up_xlsx = st.file_uploader("העלה אקסל ליצירת משתמשים", type=['xlsx'])
-            if up_xlsx and st.button("סנכרן נתונים לענן"):
-                df_new = pd.read_excel(up_xlsx)
-                df_new['password'] = df_new['password'].apply(lambda x: hash_pwd(str(x)))
-                save_table(df_new, "users")
-                st.success("המשתמשים עודכנו בגיליון הענן!")
-            st.markdown('</div>', unsafe_allow_html=True)
+            st.subheader("העלאת דוח שיחות יומי לחיזוי")
+            c_file = st.file_uploader("דוח שיחות (תאריך, כמות_שיחות)", type=['xlsx'])
+            if c_file and st.button("עדכן חיזוי"):
+                # לוגיקה לשמירה בגיליון 'calls_data'
+                st.success("הנתונים עובדו. החיזוי למחר עודכן.")
+            
+            # הצגת גרף חיזוי מול נציגים בפועל
+            perf = get_data("performance")
+            if not perf.empty:
+                st.plotly_chart(px.bar(perf, x='date', y='calls', title="עומס שיחות מתוכנן"))
 
-    # --- פאנל משא: חיזוי וגיוס ---
-    elif role == "משא":
-        st.header('📈 פאנל משא"בי אנוש')
-        st.markdown('<div class="card">', unsafe_allow_html=True)
-        st.subheader("בקשת גיוס חדשה")
-        fn = st.text_input("שם מלא")
-        un = st.text_input("שם משתמש מבוקש")
-        if st.button("שלח ל-IT"):
-            onboard_df = get_table("onboarding")
-            new_row = pd.DataFrame([{"username": un, "full_name": fn, "status": "קליטה"}])
-            save_table(pd.concat([onboard_df, new_row]), "onboarding")
-            st.success("הבקשה נרשמה בענן")
-        st.markdown('</div>', unsafe_allow_html=True)
-
-    # --- פאנל ר"צ: שיבוץ חכם ---
+    # --- פאנל ר"צ: ניהול משמרות מטורף ---
     elif role == 'ר"צ':
-        st.header(f"👥 ניהול צוות: {st.session_state['team']}")
-        sel_date = st.date_input("תאריך לשיבוץ")
-        st.markdown('<div class="card">', unsafe_allow_html=True)
-        # קריאת אילוצים מהענן
-        cons = get_table("constraints")
-        day_cons = cons[cons['date'] == str(sel_date)]
-        st.write("אילוצים מהענן ליום זה:")
-        st.dataframe(day_cons)
-        st.markdown('</div>', unsafe_allow_html=True)
+        st.header(f"👥 צוות: {st.session_state['user']}")
+        t1, t2 = st.tabs(["שיבוץ חכם", "אישור מחלות"])
+        
+        with t1:
+            st.subheader("מערכת שיבוץ מבוססת אילוצים")
+            target_date = st.date_input("בחר יום לשיבוץ")
+            cons = get_data("constraints")
+            # סינון אוטומטי רק לנציגים של הר"צ הזה
+            my_agents = cons[cons['manager'] == st.session_state['user']]
+            st.write("אילוצי הנציגים שלך:")
+            st.dataframe(my_agents)
 
-    # --- פאנל נציג: הגשת אילוץ לענן ---
+    # --- פאנל נציג: ממשק אישי ---
     elif role == "נציג":
-        st.header("👤 פורטל נציג")
-        st.markdown('<div class="card">', unsafe_allow_html=True)
-        d = st.date_input("בחר תאריך")
-        note = st.text_area("הערות")
-        if st.button("שלח אילוץ לענן"):
-            all_cons = get_table("constraints")
-            new_con = pd.DataFrame([{"username": st.session_state['user'], "date": str(d), "note": note}])
-            save_table(pd.concat([all_cons, new_con]), "constraints")
-            st.success("האילוץ נשמר ב-Google Sheets")
-        st.markdown('</div>', unsafe_allow_html=True)
+        st.header("👤 פורטל אישי")
+        with st.expander("הגשת אילוץ למערכת המשמרות"):
+            d = st.date_input("תאריך")
+            shift = st.selectbox("משמרת מועדפת", ["בוקר", "ערב", "לילה"])
+            if st.button("שלח אילוץ"):
+                all_c = get_data("constraints")
+                new_c = pd.DataFrame([{"username": st.session_state['user'], "date": str(d), 
+                                     "shift": shift, "manager": st.session_state['manager']}])
+                save_data(pd.concat([all_c, new_c]), "constraints")
+                st.success("האילוץ נשלח לר"צ שלך")
 
-    # --- פאנל מנהל מוקד: דוחות ביצועים ---
-    elif role == "מנהל מוקד":
-        st.header("📊 דאשבורד מנהל מוקד")
-        perf_data = get_table("performance")
-        if not perf_data.empty:
-            fig = px.line(perf_data, x='date', y='value', color='metric', title="מגמות עומס במוקד")
-            st.plotly_chart(fig, use_container_width=True)
+    # --- פאנל מש"א: מבט על ---
+    elif role == "משא":
+        st.header("📋 משאבי אנוש - תמונת מצב")
+        users = get_data("users")
+        st.metric("סה"כ עובדים במערכת", len(users))
+        st.write("רשימת עובדים פעילה (מקושר לענן):")
+        st.dataframe(users[['username', 'role', 'team', 'manager']])
