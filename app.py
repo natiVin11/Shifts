@@ -4,7 +4,7 @@ from streamlit_calendar import calendar
 import pandas as pd
 import hashlib
 from datetime import datetime, date, time
-import io
+import time as python_time # השהיה למניעת Quota Error
 
 # --- הגדרות דף ---
 st.set_page_config(page_title="MGROUP 360 | Master ERP", layout="wide")
@@ -30,7 +30,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- חיבור וטעינת נתונים (עם ניקוי KeyError) ---
+# --- חיבור וטעינת נתונים ---
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 def load_data(sheet):
@@ -42,9 +42,13 @@ def load_data(sheet):
         return pd.DataFrame()
 
 def save_data(df, sheet):
-    if df is not None:
-        conn.update(worksheet=sheet, data=df.fillna(""))
-        st.cache_data.clear()
+    try:
+        if df is not None:
+            conn.update(worksheet=sheet, data=df.fillna(""))
+            st.cache_data.clear()
+            python_time.sleep(1) # השהיה קלה למניעת שגיאות API
+    except Exception as e:
+        st.error(f"שגיאת תקשורת עם גוגל (API Error). וודא שיש לך הרשאות עריכה. פירוט: {e}")
 
 # --- ניהול התחברות ---
 if 'auth' not in st.session_state:
@@ -65,7 +69,7 @@ if not st.session_state.auth["logged_in"]:
                 if not match.empty:
                     stored = str(match.iloc[0]['password'])
                     if p_in == stored or hash_pwd(p_in) == stored:
-                        if p_in == stored: # הצפנה אוטומטית
+                        if p_in == stored:
                             u_df.loc[match.index, 'password'] = hash_pwd(p_in)
                             save_data(u_df, "users")
                         st.session_state.auth = {"logged_in": True, "user": match.iloc[0]['username'], "role": match.iloc[0]['role'], "team": match.iloc[0]['team']}
@@ -78,28 +82,24 @@ else:
         st.session_state.auth = {"logged_in": False}
         st.rerun()
 
-    # --- 1. מנהל מערכת (IT) ---
+    # --- פאנל IT ---
     if u['role'] == "IT":
         st.title("🛠️ פאנל IT")
-        it1, it2, it3 = st.tabs(["👥 ניהול משתמשים", "📈 ביצועים", "✅ Onboarding"])
+        it1, it2 = st.tabs(["👥 ניהול משתמשים", "📈 דוח ביצועים"])
         with it1:
-            st.subheader("ייבוא משתמשים מאקסל")
-            f = st.file_uploader("העלה קובץ", type=['xlsx', 'csv'])
+            f = st.file_uploader("ייבוא משתמשים (Excel/CSV)", type=['xlsx', 'csv'])
             if f and st.button("ייבא עובדים"):
                 new_u = pd.read_excel(f) if f.name.endswith('xlsx') else pd.read_csv(f)
                 save_data(pd.concat([load_data("users"), new_u.astype(str)]), "users")
-            st.divider()
             ed_u = st.data_editor(load_data("users"), num_rows="dynamic")
             if st.button("שמור שינויים"): save_data(ed_u, "users")
-
         with it2:
-            st.subheader("העלאת דוח ביצועים")
-            pf = st.file_uploader("דוח ביצועים", type=['xlsx', 'csv'], key="perf")
+            pf = st.file_uploader("העלה דוח ביצועים", type=['xlsx', 'csv'], key="perf")
             if pf and st.button("עדכן דוח"):
                 new_p = pd.read_excel(pf) if pf.name.endswith('xlsx') else pd.read_csv(pf)
                 save_data(pd.concat([load_data("performance"), new_p.astype(str)]), "performance")
 
-    # --- 2. ר"צ (Team Lead) ---
+    # --- פאנל ר"צ (ניהול אילוצים) ---
     elif u['role'] == "ר\"צ":
         st.title(f"🚀 ניהול צוות: {u['user']}")
         rt1, rt2 = st.tabs(["📅 אישור אילוצים", "👥 ביצועי נציגים"])
@@ -114,15 +114,18 @@ else:
                 st.info(f"מנהל אילוץ עבור {sel['username']}")
                 c1, c2 = st.columns(2)
                 if c1.button("✅ אשר כמשמרת"):
-                    new_s = pd.DataFrame([{"username": sel['username'], "date": sel['date'], "start_time": sel['start_time'], "end_time": sel['end_time'], "team": u['team']}])
-                    save_data(pd.concat([sched, new_s]), "schedule")
-                    save_data(cons.drop(idx), "constraints")
+                    new_s = pd.DataFrame([{"username": sel['username'], "date": sel['date'], "start_time": sel.get('start_time','08:00'), "end_time": sel.get('end_time','16:00'), "team": u['team']}])
+                    # פעולה כפולה: הוספה לסידור ומחיקה מהאילוצים
+                    combined_sched = pd.concat([sched, new_s])
+                    save_data(combined_sched, "schedule")
+                    new_cons = cons.drop(idx)
+                    save_data(new_cons, "constraints")
                     st.rerun()
                 if c2.button("❌ דחה"):
                     save_data(cons.drop(idx), "constraints")
                     st.rerun()
 
-    # --- 3. נציג (Agent) ---
+    # --- פאנל נציג ---
     elif u['role'] == "נציג":
         st.header(f"👤 פורטל נציג: {u['user']}")
         nt1, nt2 = st.tabs(["📝 הגשת אילוץ", "📅 המשמרות שלי"])
@@ -138,22 +141,14 @@ else:
                         save_data(pd.concat([c_df, pd.DataFrame([{"username": u['user'], "date": d, "start_time": s_t.strftime("%H:%M"), "end_time": e_t.strftime("%H:%M")}])]), "constraints")
         with nt2:
             sh = load_data("schedule")
-            # תיקון ה-KeyError: בדיקת קיום עמודה לפני סינון
             if not sh.empty and 'username' in sh.columns:
                 my_s = sh[sh['username'].str.lower() == u['user'].lower()]
                 ev_s = [{"title": f"{r['start_time']}-{r['end_time']}", "start": r['date'], "color": "#28a745"} for i, r in my_s.iterrows()]
                 calendar(events=ev_s, options={"initialView": "dayGridMonth", "direction": "rtl"}, key="sh_cal")
 
-    # --- 4. מנהל מוקד ---
-    elif u['role'] == "מנהל מוקד":
-        st.title(f"📊 מוקד: {u['team']}")
-        sched = load_data("schedule")
-        ed_s = st.data_editor(sched[sched['team'] == u['team']], num_rows="dynamic")
-        if st.button("פרסם"): save_data(pd.concat([sched[sched['team'] != u['team']], ed_s]), "schedule")
-
-    # --- 5. משא"בי אנוש (HR) ---
+    # --- פאנל משא"ב ---
     elif u['role'] == "משא":
         st.title("📋 פורטל HR")
         ob = load_data("onboarding")
-        st.data_editor(ob, num_rows="dynamic", key="hr_ed")
-        if st.button("עדכן"): save_data(st.session_state.hr_ed, "onboarding")
+        ed_ob = st.data_editor(ob, num_rows="dynamic", key="hr_ed")
+        if st.button("עדכן"): save_data(ed_ob, "onboarding")
