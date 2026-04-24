@@ -4,6 +4,7 @@ import pandas as pd
 import hashlib
 import plotly.express as px
 from datetime import datetime
+import io
 
 # --- הגדרות עיצוב MGROUP 360 ---
 st.set_page_config(page_title="MGROUP 360 | Enterprise ERP", layout="wide")
@@ -43,6 +44,13 @@ def save_data(df, sheet_name):
 
 def hash_pwd(pwd): return hashlib.sha256(str.encode(str(pwd))).hexdigest()
 
+# --- פונקציית ייצוא לאקסל ---
+def to_excel(df):
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        df.to_excel(writer, index=False, sheet_name='Users_List')
+    return output.getvalue()
+
 # --- כותרת לוגו ---
 st.markdown(f'''<div class="header-card">
     <img src="https://www.mgrp.co.il/wp-content/uploads/2022/04/Logo-color@1x.svg" width="180">
@@ -77,10 +85,10 @@ else:
         st.session_state['logged_in'] = False
         st.rerun()
 
-    # --- פאנל IT: המעטפת הטכנית ---
+    # --- פאנל IT ---
     if role == "IT":
         st.header("⚙️ מרכז בקרה IT")
-        t = st.tabs(["ניהול ועריכה", "ייבוא אקסל", "צ'ק-ליסט מערכות", "דוחות וחיזוי"])
+        t = st.tabs(["ניהול ועריכה", "ייבוא וייצוא", "צ'ק-ליסט מערכות", "דוחות"])
         
         with t[0]:
             st.markdown('<div class="card">', unsafe_allow_html=True)
@@ -103,12 +111,25 @@ else:
 
         with t[1]:
             st.markdown('<div class="card">', unsafe_allow_html=True)
-            up = st.file_uploader("העלה קובץ משתמשים", type=['xlsx'])
+            st.subheader("ייבוא משתמשים")
+            up = st.file_uploader("העלה אקסל", type=['xlsx'])
             if up and st.button("בצע ייבוא המוני"):
                 new_u = pd.read_excel(up)
-                new_u['password'] = new_u['password'].apply(hash_pwd)
+                new_u['password'] = new_u['password'].apply(lambda x: hash_pwd(str(x)))
                 new_u['status'] = 'Active'
                 save_data(pd.concat([get_data("users"), new_u]).drop_duplicates(subset=['username']), "users")
+            
+            st.divider()
+            st.subheader("ייצוא רשימת משתמשים")
+            current_users = get_data("users")
+            if not current_users.empty:
+                excel_data = to_excel(current_users)
+                st.download_button(
+                    label="📥 הורד רשימת משתמשים וסיסמאות (Excel)",
+                    data=excel_data,
+                    file_name=f"mgroup_users_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
             st.markdown('</div>', unsafe_allow_html=True)
 
         with t[2]:
@@ -116,10 +137,10 @@ else:
             ob = get_data("onboarding")
             st.data_editor(ob, key="it_ob_editor", on_change=lambda: save_data(st.session_state.it_ob_editor, "onboarding"))
 
-    # --- פאנל משא: ניהול משאבי אנוש ---
+    # --- פאנל משא ---
     elif role == "משא":
         st.header('📋 פאנל משא"בי אנוש')
-        t = st.tabs(["גיוס והסרה", "מעקב צ'ק-ליסט", "חיזוי עומסים"])
+        t = st.tabs(["גיוס והסרה", "מעקב צ'ק-ליסט"])
         with t[0]:
             st.markdown('<div class="card">', unsafe_allow_html=True)
             u_name = st.text_input("שם העובד")
@@ -130,10 +151,10 @@ else:
                 save_data(pd.concat([df, new_r]), "onboarding")
             st.markdown('</div>', unsafe_allow_html=True)
 
-    # --- פאנל נציג: פורטל אישי ---
+    # --- פאנל נציג ---
     elif role == "נציג":
         st.header("👤 הפורטל האישי שלי")
-        t = st.tabs(["אילוצים וחופשים", "דיווח מחלה", "המשמרות שלי"])
+        t = st.tabs(["אילוצים וחופשים", "דיווח מחלה"])
         with t[0]:
             st.markdown('<div class="card">', unsafe_allow_html=True)
             d = st.date_input("תאריך")
@@ -144,30 +165,23 @@ else:
                 new_c = pd.DataFrame([{"username": st.session_state['user'], "date": str(d), "type": tp, "note": note, "manager": st.session_state['manager_name']}])
                 save_data(pd.concat([df, new_c]), "constraints")
             st.markdown('</div>', unsafe_allow_html=True)
-        with t[1]:
-            st.subheader("העלאת אישור מחלה (PDF)")
-            st.file_uploader("צרף קובץ אישור", type=['pdf', 'jpg'])
 
-    # --- פאנל ר"צ: ניהול צוות ---
+    # --- פאנל ר"צ ---
     elif role == 'ר"צ':
         st.header(f'👥 ניהול צוות: {st.session_state["user"]}')
-        t = st.tabs(["לוח שיבוץ", "אילוצי הצוות", "נתוני ביצועים"])
+        t = st.tabs(["לוח שיבוץ", "אילוצי הצוות"])
         with t[1]:
             all_c = get_data("constraints")
             st.dataframe(all_c[all_c['manager'] == st.session_state['user']])
-        with t[2]:
-            st.subheader("נתוני תפוקה ושיחות")
-            perf = get_data("performance")
-            st.dataframe(perf)
 
-    # --- פאנל מנהל מוקד: בקרת מוקד ---
+    # --- פאנל מנהל מוקד ---
     elif role == "מנהל מוקד":
         st.header(f'📊 מוקד: {st.session_state["team"]}')
         perf = get_data("performance")
         if not perf.empty:
             st.plotly_chart(px.line(perf[perf['team'] == st.session_state['team']], x='date', y='calls', title="חיזוי מול ביצוע"))
 
-    # --- פאנל מנהל פרוייקט: High-Level BI ---
+    # --- פאנל מנהל פרוייקט ---
     elif role == "מנהל פרוייקט":
         st.header("🌐 ניהול פרוייקט - MGROUP Global")
         perf = get_data("performance")
