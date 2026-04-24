@@ -44,10 +44,11 @@ def save_data(df, sheet_name):
 
 def hash_pwd(pwd): return hashlib.sha256(str.encode(str(pwd))).hexdigest()
 
-# --- פונקציית ייצוא לאקסל ---
+# --- פונקציית ייצוא לאקסל (מתוקנת) ---
 def to_excel(df):
     output = io.BytesIO()
-    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+    # שימוש ב-openpyxl כברירת מחדל שהיא נפוצה יותר
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
         df.to_excel(writer, index=False, sheet_name='Users_List')
     return output.getvalue()
 
@@ -68,10 +69,15 @@ if not st.session_state['logged_in']:
         if st.button("כניסה למערכת"):
             u_df = get_data("users")
             if not u_df.empty:
+                # סינון משתמש פעיל בלבד
                 user_row = u_df[(u_df['username'] == u_in) & (u_df['status'] == 'Active')]
                 if not user_row.empty and hash_pwd(p_in) == user_row.iloc[0]['password']:
-                    st.session_state.update({"logged_in": True, "user": u_in, "role": user_row.iloc[0]['role'], 
-                                           "team": user_row.iloc[0]['team'], "manager_name": user_row.iloc[0].get('manager', 'None')})
+                    st.session_state.update({
+                        "logged_in": True, "user": u_in, 
+                        "role": user_row.iloc[0]['role'], 
+                        "team": user_row.iloc[0]['team'], 
+                        "manager_name": user_row.iloc[0].get('manager', 'None')
+                    })
                     st.rerun()
             if u_in == "admin" and p_in == "admin123":
                 st.session_state.update({"logged_in": True, "user": "admin", "role": "IT", "team": "ניהול", "manager_name": "None"})
@@ -112,7 +118,7 @@ else:
         with t[1]:
             st.markdown('<div class="card">', unsafe_allow_html=True)
             st.subheader("ייבוא משתמשים")
-            up = st.file_uploader("העלה אקסל", type=['xlsx'])
+            up = st.file_uploader("העלה אקסל לייבוא", type=['xlsx'])
             if up and st.button("בצע ייבוא המוני"):
                 new_u = pd.read_excel(up)
                 new_u['password'] = new_u['password'].apply(lambda x: hash_pwd(str(x)))
@@ -120,16 +126,19 @@ else:
                 save_data(pd.concat([get_data("users"), new_u]).drop_duplicates(subset=['username']), "users")
             
             st.divider()
-            st.subheader("ייצוא רשימת משתמשים")
-            current_users = get_data("users")
-            if not current_users.empty:
-                excel_data = to_excel(current_users)
-                st.download_button(
-                    label="📥 הורד רשימת משתמשים וסיסמאות (Excel)",
-                    data=excel_data,
-                    file_name=f"mgroup_users_{datetime.now().strftime('%Y%m%d')}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
+            st.subheader("ייצוא משתמשים")
+            curr_u = get_data("users")
+            if not curr_u.empty:
+                try:
+                    excel_out = to_excel(curr_u)
+                    st.download_button(
+                        label="📥 הורד רשימת משתמשים וסיסמאות (Excel)",
+                        data=excel_out,
+                        file_name=f"mgroup_users_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    )
+                except Exception as e:
+                    st.error(f"שגיאה בהכנת הקובץ: {e}")
             st.markdown('</div>', unsafe_allow_html=True)
 
         with t[2]:
