@@ -51,7 +51,8 @@ def load_data(sheet_name):
         df = conn.read(worksheet=sheet_name, ttl=0).dropna(how='all')
         df.columns = df.columns.str.strip().str.lower()
         return df.astype(str)
-    except: return pd.DataFrame()
+    except:
+        return pd.DataFrame()
 
 def save_to_sheet(df, sheet_name):
     conn.update(worksheet=sheet_name, data=df.fillna(""))
@@ -64,7 +65,7 @@ def hash_pwd(p):
 if 'auth' not in st.session_state:
     st.session_state.auth = {"logged_in": False, "user": None, "role": None, "team": None}
 
-def login_screen():
+if not st.session_state.auth["logged_in"]:
     st.markdown('<div class="header-container">', unsafe_allow_html=True)
     st.image("https://www.mgrp.co.il/wp-content/uploads/2022/04/Logo-color@1x.svg", width=180)
     st.markdown('<h1>MGROUP 360 | פורטל ניהול ארגוני</h1>', unsafe_allow_html=True)
@@ -95,9 +96,6 @@ def login_screen():
                 st.error("פרטי כניסה שגויים או משתמש מושבת")
         st.markdown('</div>', unsafe_allow_html=True)
 
-# --- גוף המערכת ---
-if not st.session_state.auth["logged_in"]:
-    login_screen()
 else:
     user_info = st.session_state.auth
     st.sidebar.markdown(f"### שלום, {user_info['user']}")
@@ -105,29 +103,18 @@ else:
         st.session_state.auth = {"logged_in": False}
         st.rerun()
 
-    # --- פאנל IT ---
-    if user_info['role'] == "IT":
-        st.header("🛠️ פאנל ניהול IT")
-        t1, t2 = st.tabs(["ניהול משתמשים", "ייצוא נתונים"])
-        with t1:
-            u_df = load_data("users")
-            if not u_df.empty:
-                sel_u = st.selectbox("בחר משתמש", u_df['username'].unique())
-                idx = u_df[u_df['username'] == sel_u].index[0]
-                if st.button("🔄 איפוס סיסמה ל-123456"):
-                    u_df.at[idx, 'password'] = hash_pwd("123456")
-                    save_to_sheet(u_df, "users")
-                    st.success("בוצע!")
-
-    # --- פאנל נציג (עם לוח שנה ויזואלי) ---
-    elif user_info['role'] == "נציג":
+    # --- פאנל נציג (פתרון ה-NameError מובנה כאן) ---
+    if user_info['role'] == "נציג":
         st.header(f"👋 שלום {user_info['user']}")
         
-        # טעינת משמרות ללוח השנה
-        sched_df = load_data("schedule")
+        # הגדרה מוקדמת של משתנים למניעת NameError
+        my_shifts = pd.DataFrame()
         events = []
+        
+        # טעינת משמרות
+        sched_df = load_data("schedule")
         if not sched_df.empty and 'username' in sched_df.columns:
-            my_shifts = sched_df[sched_df['username'].str.strip() == user_info['user']]
+            my_shifts = sched_df[sched_df['username'].str.strip().str.lower() == user_info['user'].lower()]
             for i, r in my_shifts.iterrows():
                 events.append({
                     "title": f"משמרת: {r.get('start_time')} - {r.get('end_time')}",
@@ -139,7 +126,8 @@ else:
                 })
 
         cal_options = {
-            "editable": True, "selectable": True, "headerToolbar": {"left": "today prev,next", "center": "title", "right": "dayGridMonth,timeGridWeek"},
+            "editable": False, "selectable": True, 
+            "headerToolbar": {"left": "today prev,next", "center": "title", "right": "dayGridMonth,timeGridWeek"},
             "initialView": "dayGridMonth", "direction": "rtl",
         }
 
@@ -158,18 +146,18 @@ else:
             sel_date = st.session_state.get('selected_date', str(date.today()))
             st.info(f"תאריך נבחר: **{sel_date}**")
             
-            st1 = st.time_input("התחלה", time(8, 0))
-            et1 = st.time_input("סיום", time(16, 0))
+            st1 = st.time_input("שעת התחלה", time(8, 0))
+            et1 = st.time_input("שעת סיום", time(16, 0))
             note = st.text_area("הערה")
             
             if st.button("שמור אילוץ"):
                 c_df = load_data("constraints")
                 new_row = pd.DataFrame([{"username": user_info['user'], "date": sel_date, "start_time": st1.strftime("%H:%M"), "end_time": et1.strftime("%H:%M"), "note": note}])
                 save_to_sheet(pd.concat([c_df, new_row]), "constraints")
-                st.success("נשמר!")
+                st.success("האילוץ נשמר בהצלחה!")
             st.markdown('</div>', unsafe_allow_html=True)
 
-            # כפתור הורדת משמרת ליומן (ICS) במידה ויש משמרת היום
+            # בדיקת קיום משמרות לאחר הגדרה מוקדמת
             if not my_shifts.empty:
                 st.subheader("הורדת משמרות")
                 for i, r in my_shifts.iterrows():
@@ -177,12 +165,31 @@ else:
                         s_dt = datetime.strptime(f"{r['date']} {r['start_time']}", "%Y-%m-%d %H:%M")
                         e_dt = datetime.strptime(f"{r['date']} {r['end_time']}", "%Y-%m-%d %H:%M")
                         ics = create_ics("MGROUP Shift", s_dt, e_dt)
-                        st.download_button(f"📅 הורד ליומן ({r['date']})", ics, file_name="shift.ics", key=f"dl_{i}")
+                        st.download_button(f"📅 ליומן ({r['date']})", ics, file_name="shift.ics", key=f"dl_{i}")
                     except: pass
 
-    # --- פאנלים אחרים (משא/מנהלים) ---
+    # --- פאנל IT ---
+    elif user_info['role'] == "IT":
+        st.title("🛠️ ניהול מערכת IT")
+        u_df = load_data("users")
+        if not u_df.empty:
+            sel_u = st.selectbox("בחר משתמש", u_df['username'].unique())
+            idx = u_df[u_df['username'] == sel_u].index[0]
+            if st.button("🔄 איפוס סיסמה ל-123456"):
+                u_df.at[idx, 'password'] = hash_pwd("123456")
+                save_to_sheet(u_df, "users")
+                st.success("הסיסמה אופסה בהצלחה!")
+            
+            st.divider()
+            if st.button("📥 הורד רשימת משתמשים"):
+                buffer = io.BytesIO()
+                with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+                    u_df.to_excel(writer, index=False)
+                st.download_button("הורד אקסל", buffer.getvalue(), file_name="users.xlsx")
+
+    # --- פאנל מנהלים ---
     elif user_info['role'] in ["מנהל מוקד", "מנהל פרוייקט"]:
         st.title("📊 דאשבורד BI")
         perf = load_data("performance")
         if not perf.empty:
-            st.plotly_chart(px.bar(perf, x='date', y='calls', color='team', barmode='group'))
+            st.plotly_chart(px.bar(perf, x='date', y='calls', color='team', barmode='group'), use_container_width=True)
