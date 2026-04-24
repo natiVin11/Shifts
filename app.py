@@ -3,13 +3,14 @@ from streamlit_gsheets import GSheetsConnection
 from streamlit_calendar import calendar
 import pandas as pd
 import hashlib
+import plotly.express as px
 from datetime import datetime, date, time
 import io
 
 # --- הגדרות דף ---
-st.set_page_config(page_title="MGROUP 360 | Enterprise System", layout="wide")
+st.set_page_config(page_title="MGROUP 360 | Master ERP", layout="wide")
 
-# --- פונקציות עזר (ICS, Hash, ניהול נתונים) ---
+# --- פונקציות עזר ---
 def create_ics(summary, start_dt, end_dt):
     return f"BEGIN:VCALENDAR\nVERSION:2.0\nBEGIN:VEVENT\nSUMMARY:{summary}\nDTSTART:{start_dt.strftime('%Y%m%dT%H%M%S')}\nDTEND:{end_dt.strftime('%Y%m%dT%H%M%S')}\nEND:VEVENT\nEND:VCALENDAR"
 
@@ -46,12 +47,11 @@ def load_data(sheet):
     except: return pd.DataFrame()
 
 def save_data(df, sheet):
-    # שומר רק אם ה-DataFrame אינו ריק כדי למנוע דריסה בטעות
     if not df.empty:
         conn.update(worksheet=sheet, data=df.fillna(""))
         st.cache_data.clear()
 
-# --- ניהול התחברות חכם ---
+# --- ניהול התחברות חכם (Smart Login) ---
 if 'auth' not in st.session_state:
     st.session_state.auth = {"logged_in": False, "user": None, "role": None, "team": None}
 
@@ -78,10 +78,8 @@ if not st.session_state.auth["logged_in"]:
                 
                 if not match.empty:
                     stored_p = str(match.iloc[0]['password']).strip()
-                    # מנגנון: מאפשר כניסה גם עם טקסט גלוי וגם עם מוצפן
                     if p_in == stored_p or hash_pwd(p_in) == stored_p:
-                        # הצפנה אוטומטית אם המשתמש נכנס עם סיסמה גלויה
-                        if p_in == stored_p:
+                        if p_in == stored_p: # הצפנה אוטומטית בכניסה ראשונה
                             u_df.loc[match.index, 'password'] = hash_pwd(p_in)
                             save_data(u_df.drop(columns=['u_clean']), "users")
                         
@@ -101,100 +99,117 @@ else:
         st.session_state.auth = {"logged_in": False}
         st.rerun()
 
-    # --- פאנל IT: ניהול משתמשים מלא ---
+    # --- 1. מנהל מערכת (IT) ---
     if user_info['role'] == "IT":
-        st.title("🛠️ ניהול מערכת (IT)")
-        t1, t2, t3 = st.tabs(["👥 ניהול משתמשים", "📂 ייצוא/ייבוא", "📉 ביצועים"])
-        with t1:
-            st.markdown('<div class="custom-card">', unsafe_allow_html=True)
+        st.title("🛠️ ניהול מערכת - IT")
+        t_it1, t_it2, t_it3, t_it4 = st.tabs(["👥 משתמשים", "📂 ייבוא/ייצוא", "✅ צ'ק-ליסט מערכות", "📈 דוח ביצועים גלובלי"])
+        
+        with t_it1:
             u_df = load_data("users")
-            # עורך טבלה שמאפשר לשנות הכל (כולל הוספת שורות)
-            edited_users = st.data_editor(u_df, num_rows="dynamic", use_container_width=True)
-            if st.button("שמור שינויים ביוזרים"):
-                save_data(edited_users, "users")
-                st.success("השינויים נשמרו ב-Google Sheets!")
-            st.markdown('</div>', unsafe_allow_html=True)
-        with t2:
-            st.markdown('<div class="custom-card">', unsafe_allow_html=True)
-            buffer = io.BytesIO()
-            with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-                u_df.to_excel(writer, index=False)
-            st.download_button("📥 הורד רשימת משתמשים (Excel)", buffer.getvalue(), file_name="mgroup_users.xlsx")
-            st.markdown('</div>', unsafe_allow_html=True)
+            edited_u = st.data_editor(u_df, num_rows="dynamic", use_container_width=True, key="it_u_ed")
+            if st.button("שמור שינויים ביוזרים"): save_data(edited_u, "users")
+            if st.button("🔄 איפוס גורף ל-123456"):
+                u_df['password'] = hash_pwd("123456")
+                save_data(u_df, "users")
+                st.success("כל הסיסמאות אופסו")
 
-    # --- פאנל מנהל מוקד: ניהול סידור ---
+        with t_it2:
+            up_file = st.file_uploader("העלה קובץ אקסל עובדים חדשים", type=['xlsx'])
+            if up_file and st.button("ייבא עובדים"):
+                new_data = pd.read_excel(up_file).astype(str)
+                save_data(pd.concat([u_df, new_data]), "users")
+
+        with t_it3:
+            ob_df = load_data("onboarding")
+            st.data_editor(ob_df, num_rows="dynamic", key="ob_ed")
+            
+        with t_it4:
+            perf_df = load_data("performance")
+            st.plotly_chart(px.bar(perf_df, x='date', y='calls', color='team', title="ביצועי מוקדים חוצה ארגון"))
+
+    # --- 2. מנהל מוקד (Manager) ---
     elif user_info['role'] == "מנהל מוקד":
-        st.title(f"📊 מנהל מוקד: {user_info['team']}")
-        m1, m2 = st.tabs(["📅 ניהול סידור", "📝 אילוצי נציגים"])
-        with m1:
-            st.markdown('<div class="custom-card">', unsafe_allow_html=True)
+        st.title(f"📊 ניהול מוקד: {user_info['team']}")
+        m_t1, m_t2, m_t3 = st.tabs(["📅 עריכת סידור", "📝 אילוצי נציגים", "📈 בקרת ביצועים BI"])
+        
+        with m_t1:
             sched = load_data("schedule")
-            # מציג רק את המשמרות של המוקד שלו
-            my_team_sched = sched[sched['team'] == user_info['team']]
-            edited_sched = st.data_editor(my_team_sched, num_rows="dynamic", use_container_width=True)
-            if st.button("פרסם סידור מעודכן"):
-                # שילוב הסידור הערוך עם שאר המוקדים
-                final_sched = pd.concat([sched[sched['team'] != user_info['team']], edited_sched])
-                save_data(final_sched, "schedule")
-                st.success("הסידור פורסם!")
-            st.markdown('</div>', unsafe_allow_html=True)
-        with m2:
-            st.markdown('<div class="custom-card">', unsafe_allow_html=True)
-            st.write("אילוצים שהוגשו על ידי נציגי המוקד:")
-            st.dataframe(load_data("constraints"))
-            st.markdown('</div>', unsafe_allow_html=True)
+            edited_sched = st.data_editor(sched[sched['team'] == user_info['team']], num_rows="dynamic")
+            if st.button("פרסם סידור"):
+                save_data(pd.concat([sched[sched['team'] != user_info['team']], edited_sched]), "schedule")
 
-    # --- פאנל נציג: לוח שנה ואילוצים ---
+        with m_t2:
+            st.write("אילוצים שהוגשו במוקד שלך:")
+            st.dataframe(load_data("constraints"))
+
+        with m_t3:
+            p_df = load_data("performance")
+            st.plotly_chart(px.line(p_df[p_df['team'] == user_info['team']], x='date', y='calls', title="עומסי שיחות במוקד"))
+
+    # --- 3. ר"צ (Team Lead) ---
+    elif user_info['role'] == "ר\"צ":
+        st.title(f"🚀 פאנל ר\"צ - צוות {user_info['user']}")
+        rt1, rt2, rt3 = st.tabs(["👥 נתוני הצוות", "📅 לוח שנה משמרות", "🔮 אילוצים וחיזוי"])
+        
+        with rt1:
+            st.write("ביצועי נציגים בצוות:")
+            st.dataframe(load_data("performance")) # כאן ניתן להוסיף פילטר לפי נציגי הצוות
+            
+        with rt2:
+            sched = load_data("schedule")
+            events = [{"title": f"{r['username']}: {r['start_time']}-{r['end_time']}", "start": r['date'], "end": r['date']} for i, r in sched.iterrows()]
+            calendar(events=events, options={"initialView": "dayGridMonth", "direction": "rtl"})
+
+        with rt3:
+            st.subheader("אילוצים מול לוח חיזוי")
+            st.write("לוח זה מאפשר לקבוע משמרות לפי צפי עומסים")
+            st.dataframe(load_data("constraints"))
+
+    # --- 4. נציג (Agent) ---
     elif user_info['role'] == "נציג":
         st.header(f"👤 פורטל נציג: {user_info['user']}")
-        
         my_shifts = pd.DataFrame()
         events = []
         sched_df = load_data("schedule")
-        
-        if not sched_df.empty and 'username' in sched_df.columns:
+        if not sched_df.empty:
             my_shifts = sched_df[sched_df['username'].str.lower() == user_info['user'].lower()]
             for i, r in my_shifts.iterrows():
-                events.append({
-                    "title": f"משמרת: {r.get('start_time')}-{r.get('end_time')}",
-                    "start": r.get('date'),
-                    "end": r.get('date'),
-                    "color": "#28a745",
-                    "allDay": True
-                })
+                events.append({"title": f"משמרת: {r['start_time']}-{r['end_time']}", "start": r['date'], "end": r['date'], "color": "#28a745", "allDay": True})
 
-        col_cal, col_form = st.columns([2, 1])
-        
-        with col_cal:
-            st.markdown('<div class="custom-card">', unsafe_allow_html=True)
-            res = calendar(events=events, options={"initialView": "dayGridMonth", "direction": "rtl"}, key="agent_cal")
-            if res.get("callback") == "dateClick":
-                st.session_state.selected_date = res["dateClick"]["date"]
-            st.markdown('</div>', unsafe_allow_html=True)
-
-        with col_form:
-            st.markdown('<div class="custom-card">', unsafe_allow_html=True)
-            st.subheader("הגשת אילוץ")
-            sel_d = st.session_state.get('selected_date', str(date.today()))
-            st.info(f"תאריך נבחר: **{sel_d}**")
-            s_t = st.time_input("שעת התחלה", time(8, 0))
-            e_t = st.time_input("שעת סיום", time(16, 0))
-            note = st.text_input("הערה (חופש/אירוע)")
+        res = calendar(events=events, options={"initialView": "dayGridMonth", "direction": "rtl"}, key="agent_cal")
+        if res.get("callback") == "dateClick":
+            st.session_state.selected_date = res["dateClick"]["date"]
+            st.info(f"תאריך נבחר לאילוץ: {res['dateClick']['date']}")
             
-            if st.button("שמור אילוץ"):
+        with st.expander("הגשת אילוץ חדש"):
+            s_t = st.time_input("התחלה", time(8,0))
+            e_t = st.time_input("סיום", time(16,0))
+            if st.button("שלח אילוץ"):
                 c_df = load_data("constraints")
-                new_c = pd.DataFrame([{"username": user_info['user'], "date": sel_d, "start_time": s_t.strftime("%H:%M"), "end_time": e_t.strftime("%H:%M"), "note": note}])
+                new_c = pd.DataFrame([{"username": user_info['user'], "date": st.session_state.get('selected_date', str(date.today())), "start_time": s_t.strftime("%H:%M"), "end_time": e_t.strftime("%H:%M")}])
                 save_data(pd.concat([c_df, new_c]), "constraints")
-                st.success("האילוץ נשמר!")
-            
-            if not my_shifts.empty:
-                st.divider()
-                st.subheader("הורד ליומן (ICS)")
-                for i, r in my_shifts.iterrows():
-                    try:
-                        s_dt = datetime.strptime(f"{r['date']} {r['start_time']}", "%Y-%m-%d %H:%M")
-                        e_dt = datetime.strptime(f"{r['date']} {r['end_time']}", "%Y-%m-%d %H:%M")
-                        ics = create_ics("משמרת MGROUP", s_dt, e_dt)
-                        st.download_button(f"📅 {r['date']}", ics, file_name=f"shift_{r['date']}.ics", key=f"dl_{i}")
-                    except: pass
-            st.markdown('</div>', unsafe_allow_html=True)
+                st.success("נשלח!")
+
+        if not my_shifts.empty:
+            st.subheader("סנכרון יומן")
+            for i, r in my_shifts.iterrows():
+                s_dt = datetime.strptime(f"{r['date']} {r['start_time']}", "%Y-%m-%d %H:%M")
+                e_dt = datetime.strptime(f"{r['date']} {r['end_time']}", "%Y-%m-%d %H:%M")
+                st.download_button(f"📅 הורד {r['date']}", create_ics("MGROUP Shift", s_dt, e_dt), file_name="shift.ics", key=f"dl_{i}")
+
+    # --- 5. משא"בי אנוש (HR) ---
+    elif user_info['role'] == "משא":
+        st.title("📋 פורטל משא\"בי אנוש")
+        h1, h2 = st.tabs(["Lifecycle (קליטה/גריעה)", "דוחות כוח אדם"])
+        
+        with h1:
+            u_name = st.text_input("שם עובד")
+            action = st.radio("פעולה", ["קליטה", "גריעה"])
+            if st.button("שלח בקשה ל-IT"):
+                ob = load_data("onboarding")
+                save_data(pd.concat([ob, pd.DataFrame([{"username": u_name, "type": action, "status": "ממתין ל-IT", "date": str(date.today())}])]), "onboarding")
+                st.success("בקשה נשלחה")
+        
+        with h2:
+            st.write("סטטוס הקמת משתמשים:")
+            st.dataframe(load_data("onboarding"))
