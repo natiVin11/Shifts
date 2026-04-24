@@ -8,29 +8,22 @@ from datetime import datetime, date, time
 import io
 
 # --- הגדרות דף ---
-st.set_page_config(page_title="MGROUP 360 | Enterprise ERP", layout="wide")
+st.set_page_config(page_title="MGROUP 360 | Management System", layout="wide")
 
-# --- פונקציית עזר לייצוא ליומן (ICS) ---
+# --- פונקציות עזר ---
 def create_ics(summary, start_dt, end_dt):
-    ics_format = f"""BEGIN:VCALENDAR
-VERSION:2.0
-PRODID:-//MGROUP//360//HE
-BEGIN:VEVENT
-SUMMARY:{summary}
-DTSTART:{start_dt.strftime('%Y%m%dT%H%M%S')}
-DTEND:{end_dt.strftime('%Y%m%dT%H%M%S')}
-DTSTAMP:{datetime.now().strftime('%Y%m%dT%H%M%S')}
-END:VEVENT
-END:VCALENDAR"""
-    return ics_format
+    return f"BEGIN:VCALENDAR\nVERSION:2.0\nBEGIN:VEVENT\nSUMMARY:{summary}\nDTSTART:{start_dt.strftime('%Y%m%dT%H%M%S')}\nDTEND:{end_dt.strftime('%Y%m%dT%H%M%S')}\nEND:VEVENT\nEND:VCALENDAR"
 
-# --- עיצוב CSS פרימיום ---
+def hash_pwd(p):
+    return hashlib.sha256(str.encode(str(p))).hexdigest()
+
+# --- עיצוב CSS ---
 def local_css():
     st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Assistant:wght@300;400;600;700&display=swap');
     html, body, [class*="css"] { font-family: 'Assistant', sans-serif; direction: RTL; text-align: right; }
-    :root { --main-blue: #1A374D; --accent-orange: #FF8C32; --soft-bg: #F8F9FA; --success-green: #28a745; }
+    :root { --main-blue: #1A374D; --accent-orange: #FF8C32; --soft-bg: #F8F9FA; }
     .stApp { background-color: var(--soft-bg); }
     .header-container { background: white; padding: 1.5rem; border-radius: 20px; box-shadow: 0 4px 20px rgba(0,0,0,0.08); margin-bottom: 2rem; border-bottom: 6px solid var(--accent-orange); text-align: center; }
     .custom-card { background: white; padding: 1.5rem; border-radius: 15px; box-shadow: 0 4px 20px rgba(0,0,0,0.08); margin-bottom: 1rem; border-right: 5px solid var(--main-blue); }
@@ -46,20 +39,16 @@ local_css()
 # --- חיבור לנתונים ---
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-def load_data(sheet_name):
+def load_data(sheet):
     try:
-        df = conn.read(worksheet=sheet_name, ttl=0).dropna(how='all')
+        df = conn.read(worksheet=sheet, ttl=0).dropna(how='all')
         df.columns = df.columns.str.strip().str.lower()
         return df.astype(str)
-    except:
-        return pd.DataFrame()
+    except: return pd.DataFrame()
 
-def save_to_sheet(df, sheet_name):
-    conn.update(worksheet=sheet_name, data=df.fillna(""))
+def save_data(df, sheet):
+    conn.update(worksheet=sheet, data=df.fillna(""))
     st.cache_data.clear()
-
-def hash_pwd(p):
-    return hashlib.sha256(str.encode(str(p))).hexdigest()
 
 # --- ניהול התחברות ---
 if 'auth' not in st.session_state:
@@ -68,7 +57,7 @@ if 'auth' not in st.session_state:
 if not st.session_state.auth["logged_in"]:
     st.markdown('<div class="header-container">', unsafe_allow_html=True)
     st.image("https://www.mgrp.co.il/wp-content/uploads/2022/04/Logo-color@1x.svg", width=180)
-    st.markdown('<h1>MGROUP 360 | פורטל ניהול ארגוני</h1>', unsafe_allow_html=True)
+    st.markdown('<h1>MGROUP 360 | כניסה למערכת</h1>', unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
     with st.columns([1, 1.5, 1])[1]:
@@ -76,7 +65,7 @@ if not st.session_state.auth["logged_in"]:
         u_in = st.text_input("שם משתמש").strip().lower()
         p_in = st.text_input("סיסמה", type="password").strip()
         
-        if st.button("כניסה למערכת"):
+        if st.button("התחבר"):
             if u_in == "admin" and p_in == "admin123":
                 st.session_state.auth = {"logged_in": True, "user": "Admin", "role": "IT", "team": "ניהול"}
                 st.rerun()
@@ -85,111 +74,88 @@ if not st.session_state.auth["logged_in"]:
             if not u_df.empty:
                 u_df['u_clean'] = u_df['username'].str.strip().str.lower()
                 match = u_df[(u_df['u_clean'] == u_in) & (u_df['status'] == 'Active')]
+                
                 if not match.empty:
-                    if hash_pwd(p_in) == str(match.iloc[0]['password']).strip():
+                    stored_p = str(match.iloc[0]['password']).strip()
+                    # מנגנון כניסה חכם: בודק גם סיסמה גלויה וגם מוצפנת
+                    if p_in == stored_p or hash_pwd(p_in) == stored_p:
+                        # אם נכנס עם סיסמה גלויה, נצפין אותה עכשיו בגיליון
+                        if p_in == stored_p:
+                            u_df.loc[match.index, 'password'] = hash_pwd(p_in)
+                            save_data(u_df.drop(columns=['u_clean']), "users")
+                        
                         st.session_state.auth = {
                             "logged_in": True, "user": match.iloc[0]['username'],
-                            "role": match.iloc[0]['role'], "team": match.iloc[0]['team'],
-                            "manager": match.iloc[0].get('manager', 'None')
+                            "role": match.iloc[0]['role'], "team": match.iloc[0]['team']
                         }
                         st.rerun()
-                st.error("פרטי כניסה שגויים או משתמש מושבת")
+                st.error("שם משתמש או סיסמה שגויים")
         st.markdown('</div>', unsafe_allow_html=True)
 
 else:
-    user_info = st.session_state.auth
-    st.sidebar.markdown(f"### שלום, {user_info['user']}")
-    if st.sidebar.button("🚪 יציאה"):
+    role = st.session_state.auth["role"]
+    st.sidebar.title(f"שלום, {st.session_state.auth['user']}")
+    if st.sidebar.button("🚪 התנתק"):
         st.session_state.auth = {"logged_in": False}
         st.rerun()
 
-    # --- פאנל נציג (פתרון ה-NameError מובנה כאן) ---
-    if user_info['role'] == "נציג":
-        st.header(f"👋 שלום {user_info['user']}")
-        
-        # הגדרה מוקדמת של משתנים למניעת NameError
+    # --- פאנל IT: ניהול משתמשים מלא ---
+    if role == "IT":
+        st.title("🛠️ ניהול מערכת (IT)")
+        t1, t2, t3 = st.tabs(["👥 משתמשים", "📈 ביצועים", "📂 גיבויים"])
+        with t1:
+            u_df = load_data("users")
+            st.data_editor(u_df, num_rows="dynamic", key="it_editor", on_change=lambda: save_data(st.session_state.it_editor, "users"))
+            if st.button("סנכרן שינויים לגיליון"):
+                save_data(u_df, "users")
+                st.success("נשמר!")
+
+    # --- פאנל מנהל מוקד: ניהול סידור וביצועים ---
+    elif role == "מנהל מוקד":
+        st.title(f"📊 ניהול מוקד: {st.session_state.auth['team']}")
+        m_t1, m_t2 = st.tabs(["📅 סידור עבודה", "📝 אילוצי נציגים"])
+        with m_t1:
+            st.subheader("עריכת סידור עבודה")
+            sched = load_data("schedule")
+            edited_sched = st.data_editor(sched[sched['team'] == st.session_state.auth['team']], num_rows="dynamic")
+            if st.button("פרסם סידור"):
+                save_data(pd.concat([sched[sched['team'] != st.session_state.auth['team']], edited_sched]), "schedule")
+                st.success("הסידור פורסם!")
+        with m_t2:
+            st.subheader("אילוצים שהוגשו")
+            st.write(load_data("constraints"))
+
+    # --- פאנל נציג: לוח שנה ואילוצים ---
+    elif role == "נציג":
+        st.header("👤 פורטל נציג")
         my_shifts = pd.DataFrame()
         events = []
-        
-        # טעינת משמרות
         sched_df = load_data("schedule")
-        if not sched_df.empty and 'username' in sched_df.columns:
-            my_shifts = sched_df[sched_df['username'].str.strip().str.lower() == user_info['user'].lower()]
+        if not sched_df.empty:
+            my_shifts = sched_df[sched_df['username'].str.lower() == st.session_state.auth['user'].lower()]
             for i, r in my_shifts.iterrows():
-                events.append({
-                    "title": f"משמרת: {r.get('start_time')} - {r.get('end_time')}",
-                    "start": r.get('date'),
-                    "end": r.get('date'),
-                    "color": "#28a745",
-                    "allDay": True,
-                    "id": i
-                })
-
-        cal_options = {
-            "editable": False, "selectable": True, 
-            "headerToolbar": {"left": "today prev,next", "center": "title", "right": "dayGridMonth,timeGridWeek"},
-            "initialView": "dayGridMonth", "direction": "rtl",
-        }
+                events.append({"title": f"משמרת: {r['start_time']}-{r['end_time']}", "start": r['date'], "end": r['date'], "color": "#28a745", "allDay": True})
 
         col_cal, col_form = st.columns([2, 1])
-        
         with col_cal:
-            st.markdown('<div class="custom-card">', unsafe_allow_html=True)
-            res = calendar(events=events, options=cal_options, key="agent_cal")
-            if res.get("callback") == "dateClick":
-                st.session_state.selected_date = res["dateClick"]["date"]
-            st.markdown('</div>', unsafe_allow_html=True)
-
+            res = calendar(events=events, options={"initialView": "dayGridMonth", "direction": "rtl"}, key="agent_cal")
+            if res.get("callback") == "dateClick": st.session_state.selected_date = res["dateClick"]["date"]
         with col_form:
-            st.markdown('<div class="custom-card">', unsafe_allow_html=True)
             st.subheader("הגשת אילוץ")
-            sel_date = st.session_state.get('selected_date', str(date.today()))
-            st.info(f"תאריך נבחר: **{sel_date}**")
-            
-            st1 = st.time_input("שעת התחלה", time(8, 0))
-            et1 = st.time_input("שעת סיום", time(16, 0))
-            note = st.text_area("הערה")
-            
-            if st.button("שמור אילוץ"):
+            sel_d = st.session_state.get('selected_date', str(date.today()))
+            st.write(f"תאריך: {sel_d}")
+            s_t = st.time_input("התחלה", time(8,0))
+            e_t = st.time_input("סיום", time(16,0))
+            if st.button("שמור"):
                 c_df = load_data("constraints")
-                new_row = pd.DataFrame([{"username": user_info['user'], "date": sel_date, "start_time": st1.strftime("%H:%M"), "end_time": et1.strftime("%H:%M"), "note": note}])
-                save_to_sheet(pd.concat([c_df, new_row]), "constraints")
-                st.success("האילוץ נשמר בהצלחה!")
-            st.markdown('</div>', unsafe_allow_html=True)
-
-            # בדיקת קיום משמרות לאחר הגדרה מוקדמת
-            if not my_shifts.empty:
-                st.subheader("הורדת משמרות")
-                for i, r in my_shifts.iterrows():
-                    try:
-                        s_dt = datetime.strptime(f"{r['date']} {r['start_time']}", "%Y-%m-%d %H:%M")
-                        e_dt = datetime.strptime(f"{r['date']} {r['end_time']}", "%Y-%m-%d %H:%M")
-                        ics = create_ics("MGROUP Shift", s_dt, e_dt)
-                        st.download_button(f"📅 ליומן ({r['date']})", ics, file_name="shift.ics", key=f"dl_{i}")
-                    except: pass
-
-    # --- פאנל IT ---
-    elif user_info['role'] == "IT":
-        st.title("🛠️ ניהול מערכת IT")
-        u_df = load_data("users")
-        if not u_df.empty:
-            sel_u = st.selectbox("בחר משתמש", u_df['username'].unique())
-            idx = u_df[u_df['username'] == sel_u].index[0]
-            if st.button("🔄 איפוס סיסמה ל-123456"):
-                u_df.at[idx, 'password'] = hash_pwd("123456")
-                save_to_sheet(u_df, "users")
-                st.success("הסיסמה אופסה בהצלחה!")
+                new_c = pd.DataFrame([{"username": st.session_state.auth['user'], "date": sel_d, "start_time": s_t.strftime("%H:%M"), "end_time": e_t.strftime("%H:%M")}])
+                save_data(pd.concat([c_df, new_c]), "constraints")
+                st.success("נשלח!")
             
-            st.divider()
-            if st.button("📥 הורד רשימת משתמשים"):
-                buffer = io.BytesIO()
-                with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-                    u_df.to_excel(writer, index=False)
-                st.download_button("הורד אקסל", buffer.getvalue(), file_name="users.xlsx")
-
-    # --- פאנל מנהלים ---
-    elif user_info['role'] in ["מנהל מוקד", "מנהל פרוייקט"]:
-        st.title("📊 דאשבורד BI")
-        perf = load_data("performance")
-        if not perf.empty:
-            st.plotly_chart(px.bar(perf, x='date', y='calls', color='team', barmode='group'), use_container_width=True)
+            if not my_shifts.empty:
+                st.divider()
+                st.subheader("הורד ליומן")
+                for i, r in my_shifts.iterrows():
+                    s_dt = datetime.strptime(f"{r['date']} {r['start_time']}", "%Y-%m-%d %H:%M")
+                    e_dt = datetime.strptime(f"{r['date']} {r['end_time']}", "%Y-%m-%d %H:%M")
+                    st.download_button(f"📅 {r['date']}", create_ics("MGROUP Shift", s_dt, e_dt), file_name="shift.ics", key=f"dl_{i}")
