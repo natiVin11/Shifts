@@ -4,12 +4,14 @@ from streamlit_calendar import calendar
 import pandas as pd
 import hashlib
 from datetime import datetime, date, time
-import time as python_time # השהיה למניעת Quota Error
+import time as python_time
+import plotly.express as px
+import io
 
 # --- הגדרות דף ---
-st.set_page_config(page_title="MGROUP 360 | Master ERP", layout="wide")
+st.set_page_config(page_title="MGROUP 360 | Master ERP System", layout="wide")
 
-# --- פונקציות עזר (אבטחה ויומן) ---
+# --- פונקציות עזר (אבטחה, יומן ועיבוד נתונים) ---
 def create_ics(summary, start_dt, end_dt):
     return f"BEGIN:VCALENDAR\nVERSION:2.0\nBEGIN:VEVENT\nSUMMARY:{summary}\nDTSTART:{start_dt.strftime('%Y%m%dT%H%M%S')}\nDTEND:{end_dt.strftime('%Y%m%dT%H%M%S')}\nEND:VEVENT\nEND:VCALENDAR"
 
@@ -30,7 +32,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- חיבור וטעינת נתונים ---
+# --- חיבור וטעינת נתונים (מנגנון מניעת KeyError) ---
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 def load_data(sheet):
@@ -46,20 +48,20 @@ def save_data(df, sheet):
         if df is not None:
             conn.update(worksheet=sheet, data=df.fillna(""))
             st.cache_data.clear()
-            python_time.sleep(1) # השהיה קלה למניעת שגיאות API
+            python_time.sleep(1) # השהיה למניעת Quota API Error
     except Exception as e:
-        st.error(f"שגיאת תקשורת עם גוגל (API Error). וודא שיש לך הרשאות עריכה. פירוט: {e}")
+        st.error(f"שגיאת API של גוגל. וודא הרשאות עריכה (Editor). שגיאה: {e}")
 
-# --- ניהול התחברות ---
+# --- ניהול התחברות חכם (Smart Login) ---
 if 'auth' not in st.session_state:
     st.session_state.auth = {"logged_in": False, "user": None, "role": None, "team": None}
 
 if not st.session_state.auth["logged_in"]:
-    st.markdown('<div class="header-container"><h1>MGROUP 360 | Master ERP</h1></div>', unsafe_allow_html=True)
+    st.markdown('<div class="header-container"><h1>MGROUP 360 | Enterprise ERP</h1></div>', unsafe_allow_html=True)
     with st.columns([1, 1.2, 1])[1]:
         u_in = st.text_input("שם משתמש").strip().lower()
         p_in = st.text_input("סיסמה", type="password")
-        if st.button("כניסה"):
+        if st.button("כניסה למערכת"):
             if u_in == "admin" and p_in == "admin123":
                 st.session_state.auth = {"logged_in": True, "user": "Admin", "role": "IT", "team": "ניהול"}
                 st.rerun()
@@ -67,42 +69,50 @@ if not st.session_state.auth["logged_in"]:
             if not u_df.empty:
                 match = u_df[u_df['username'].str.lower() == u_in]
                 if not match.empty:
-                    stored = str(match.iloc[0]['password'])
+                    stored = str(match.iloc[0]['password']).strip()
                     if p_in == stored or hash_pwd(p_in) == stored:
-                        if p_in == stored:
+                        if p_in == stored: # הצפנה אוטומטית בכניסה ראשונה
                             u_df.loc[match.index, 'password'] = hash_pwd(p_in)
                             save_data(u_df, "users")
                         st.session_state.auth = {"logged_in": True, "user": match.iloc[0]['username'], "role": match.iloc[0]['role'], "team": match.iloc[0]['team']}
                         st.rerun()
-            st.error("פרטי כניסה שגויים")
+            st.error("פרטי כניסה שגויים או משתמש מושבת")
 else:
-    u = st.session_state.auth
-    st.sidebar.title(f"שלום, {u['user']}")
-    if st.sidebar.button("התנתק"):
+    user = st.session_state.auth
+    st.sidebar.title(f"שלום, {user['user']}")
+    st.sidebar.write(f"תפקיד: {user['role']}")
+    if st.sidebar.button("🚪 התנתק"):
         st.session_state.auth = {"logged_in": False}
         st.rerun()
 
-    # --- פאנל IT ---
-    if u['role'] == "IT":
-        st.title("🛠️ פאנל IT")
-        it1, it2 = st.tabs(["👥 ניהול משתמשים", "📈 דוח ביצועים"])
-        with it1:
-            f = st.file_uploader("ייבוא משתמשים (Excel/CSV)", type=['xlsx', 'csv'])
-            if f and st.button("ייבא עובדים"):
+    # --- 1. מנהל מערכת (IT) ---
+    if user['role'] == "IT":
+        st.title("🛠️ פאנל IT - ניהול תשתית")
+        it_t1, it_t2, it_t3 = st.tabs(["👥 משתמשים (כולל אקסל)", "📊 דוחות ביצועים", "✅ צ'ק-ליסט Onboarding"])
+        with it_t1:
+            st.subheader("ייבוא משתמשים חדשים")
+            f = st.file_uploader("העלה קובץ עובדים (XLSX/CSV)", type=['xlsx', 'csv'])
+            if f and st.button("ייבא למערכת"):
                 new_u = pd.read_excel(f) if f.name.endswith('xlsx') else pd.read_csv(f)
                 save_data(pd.concat([load_data("users"), new_u.astype(str)]), "users")
+            st.divider()
             ed_u = st.data_editor(load_data("users"), num_rows="dynamic")
-            if st.button("שמור שינויים"): save_data(ed_u, "users")
-        with it2:
-            pf = st.file_uploader("העלה דוח ביצועים", type=['xlsx', 'csv'], key="perf")
-            if pf and st.button("עדכן דוח"):
-                new_p = pd.read_excel(pf) if pf.name.endswith('xlsx') else pd.read_csv(pf)
-                save_data(pd.concat([load_data("performance"), new_p.astype(str)]), "performance")
+            if st.button("שמור שינויים ביוזרים"): save_data(ed_u, "users")
+            if st.button("🔄 איפוס גורף ל-123456"):
+                u_df = load_data("users")
+                u_df['password'] = hash_pwd("123456")
+                save_data(u_df, "users")
+        with it_t2:
+            pf = st.file_uploader("העלה דוח ביצועים יומי", type=['xlsx', 'csv'], key="perf")
+            if pf and st.button("עדכן נתוני ביצועים"):
+                save_data(pd.concat([load_data("performance"), (pd.read_excel(pf) if pf.name.endswith('xlsx') else pd.read_csv(pf)).astype(str)]), "performance")
+        with it_t3:
+            st.data_editor(load_data("onboarding"), num_rows="dynamic", key="it_ob")
 
-    # --- פאנל ר"צ (ניהול אילוצים) ---
-    elif u['role'] == "ר\"צ":
-        st.title(f"🚀 ניהול צוות: {u['user']}")
-        rt1, rt2 = st.tabs(["📅 אישור אילוצים", "👥 ביצועי נציגים"])
+    # --- 2. ר"צ (Team Lead) ---
+    elif user['role'] == "ר\"צ":
+        st.title(f"🚀 ניהול צוות: {user['user']}")
+        rt1, rt2 = st.tabs(["📅 אישור אילוצים", "👥 ביצועי הצוות"])
         with rt1:
             cons = load_data("constraints")
             sched = load_data("schedule")
@@ -111,44 +121,72 @@ else:
             if res_tl.get("eventClick"):
                 idx = int(res_tl["eventClick"]["event"]["id"])
                 sel = cons.iloc[idx]
-                st.info(f"מנהל אילוץ עבור {sel['username']}")
+                st.info(f"מנהל אילוץ עבור: {sel['username']} ב-{sel['date']}")
                 c1, c2 = st.columns(2)
                 if c1.button("✅ אשר כמשמרת"):
-                    new_s = pd.DataFrame([{"username": sel['username'], "date": sel['date'], "start_time": sel.get('start_time','08:00'), "end_time": sel.get('end_time','16:00'), "team": u['team']}])
-                    # פעולה כפולה: הוספה לסידור ומחיקה מהאילוצים
-                    combined_sched = pd.concat([sched, new_s])
-                    save_data(combined_sched, "schedule")
-                    new_cons = cons.drop(idx)
-                    save_data(new_cons, "constraints")
-                    st.rerun()
-                if c2.button("❌ דחה"):
+                    new_s = pd.DataFrame([{"username": sel['username'], "date": sel['date'], "start_time": sel.get('start_time','08:00'), "end_time": sel.get('end_time','16:00'), "team": user['team']}])
+                    save_data(pd.concat([sched, new_s]), "schedule")
                     save_data(cons.drop(idx), "constraints")
                     st.rerun()
+                if c2.button("❌ דחה/מחק"):
+                    save_data(cons.drop(idx), "constraints")
+                    st.rerun()
+        with rt2:
+            st.subheader("נתוני הצוות")
+            st.dataframe(load_data("performance"))
 
-    # --- פאנל נציג ---
-    elif u['role'] == "נציג":
-        st.header(f"👤 פורטל נציג: {u['user']}")
+    # --- 3. נציג (Agent) ---
+    elif user['role'] == "נציג":
+        st.header(f"👤 פורטל נציג: {user['user']}")
         nt1, nt2 = st.tabs(["📝 הגשת אילוץ", "📅 המשמרות שלי"])
         with nt1:
-            res_a = calendar(events=[], options={"initialView": "dayGridMonth", "direction": "rtl"}, key="a_cal")
+            st.subheader("לחץ על תאריך להגשת אילוץ")
+            res_a = calendar(events=[], options={"initialView": "dayGridMonth", "direction": "rtl"}, key="a_con")
             if res_a.get("dateClick"):
                 d = res_a["dateClick"]["date"]
-                with st.expander(f"אילוץ ל-{d}", expanded=True):
-                    s_t = st.time_input("התחלה", time(8,0))
-                    e_t = st.time_input("סיום", time(16,0))
-                    if st.button("שלח"):
-                        c_df = load_data("constraints")
-                        save_data(pd.concat([c_df, pd.DataFrame([{"username": u['user'], "date": d, "start_time": s_t.strftime("%H:%M"), "end_time": e_t.strftime("%H:%M")}])]), "constraints")
+                with st.expander(f"הזנת שעות ל-{d}", expanded=True):
+                    s = st.time_input("התחלה", time(8,0))
+                    e = st.time_input("סיום", time(16,0))
+                    if st.button("שלח אילוץ"):
+                        save_data(pd.concat([load_data("constraints"), pd.DataFrame([{"username": user['user'], "date": d, "start_time": s.strftime("%H:%M"), "end_time": e.strftime("%H:%M")}])]), "constraints")
+                        st.success("נשלח!")
         with nt2:
-            sh = load_data("schedule")
-            if not sh.empty and 'username' in sh.columns:
-                my_s = sh[sh['username'].str.lower() == u['user'].lower()]
+            st.subheader("משמרות מאושרות")
+            df_s = load_data("schedule")
+            if not df_s.empty and 'username' in df_s.columns:
+                my_s = df_s[df_s['username'].str.lower() == user['user'].lower()]
                 ev_s = [{"title": f"{r['start_time']}-{r['end_time']}", "start": r['date'], "color": "#28a745"} for i, r in my_s.iterrows()]
                 calendar(events=ev_s, options={"initialView": "dayGridMonth", "direction": "rtl"}, key="sh_cal")
+                for i, r in my_s.iterrows():
+                    try:
+                        s_dt = datetime.strptime(f"{r['date']} {r['start_time']}", "%Y-%m-%d %H:%M")
+                        e_dt = datetime.strptime(f"{r['date']} {r['end_time']}", "%Y-%m-%d %H:%M")
+                        st.download_button(f"📅 סנכרן {r['date']} ליומן", create_ics("MGROUP Shift", s_dt, e_dt), file_name="shift.ics", key=f"dl_{i}")
+                    except: pass
 
-    # --- פאנל משא"ב ---
-    elif u['role'] == "משא":
+    # --- 4. מנהל מוקד (Manager) ---
+    elif user['role'] == "מנהל מוקד":
+        st.title(f"📊 מוקד: {user['team']}")
+        m_tabs = st.tabs(["📅 עריכת סידור", "📈 ביצועי מוקד"])
+        with m_tabs[0]:
+            sched = load_data("schedule")
+            ed_s = st.data_editor(sched[sched['team'] == user['team']], num_rows="dynamic")
+            if st.button("פרסם שינויים בסידור"):
+                save_data(pd.concat([sched[sched['team'] != user['team']], ed_s]), "schedule")
+        with m_tabs[1]:
+            p_df = load_data("performance")
+            if not p_df.empty:
+                p_df['calls'] = pd.to_numeric(p_df['calls'], errors='coerce')
+                st.plotly_chart(px.line(p_df[p_df['team'] == user['team']], x='date', y='calls', title="עומס שיחות במוקד"))
+
+    # --- 5. משא"בי אנוש (HR) ---
+    elif user['role'] == "משא":
         st.title("📋 פורטל HR")
-        ob = load_data("onboarding")
-        ed_ob = st.data_editor(ob, num_rows="dynamic", key="hr_ed")
-        if st.button("עדכן"): save_data(ed_ob, "onboarding")
+        hr1, hr2 = st.tabs(["Lifecycle", "דוחות כוח אדם"])
+        with hr1:
+            nm = st.text_input("שם עובד")
+            tp = st.radio("פעולה", ["קליטה", "גריעה"])
+            if st.button("שלח בקשה ל-IT"):
+                save_data(pd.concat([load_data("onboarding"), pd.DataFrame([{"username": nm, "type": tp, "status": "ממתין", "date": str(date.today())}])]), "onboarding")
+        with hr2:
+            st.dataframe(load_data("onboarding"))
